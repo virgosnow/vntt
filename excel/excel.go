@@ -35,7 +35,7 @@ func (e *Excel) Test() error {
 }
 
 func (e *Excel) Main() error {
-	return e.HssHFind()
+	return e.HssH()
 	//return e.HssH()
 }
 
@@ -82,105 +82,8 @@ func HttpGet(reqUrl string) ([]byte, error) {
 	return ioutil.ReadAll(resp.Body)
 }
 
-func (e *Excel) HssHFind() error {
-	f, err := excelize.OpenFile("./tcpclient/excel/hssh.xlsx")
-	f2, err := excelize.OpenFile("./tcpclient/excel/hssh-renpy-tl.xlsx")
-	if err != nil {
-		return err
-	}
-	// 自动换行
-	styleID, err := e.Output.NewStyle(&excelize.Style{Alignment: &excelize.Alignment{Vertical: "center", WrapText: true}})
-	if err != nil {
-		return err
-	}
-	// 获取工作表中指定单元格的值
-	sheetList := f.GetSheetList()
-	for _, sheet := range sheetList {
-		if sheet == "HSSH.xlsx|10日目" {
-			break
-		}
-		rows, err := f.GetRows(sheet)
-		rows2, err := f2.GetRows(sheet)
-		if err != nil {
-			return err
-		}
-		f2Has := make(map[string]int)
-		m1 := regexp.MustCompile(`[\x20-\x7e]+`)
-		for index2, row2 := range rows2 {
-			ori2SimText := m1.ReplaceAllString(row2[2], "")
-			f2Has[ori2SimText] = index2
-		}
-		// 删除特殊
-		delete(f2Has, "……")
-		e.Output.NewSheet(sheet)
-		stream, err := e.Output.NewStreamWriter(sheet)
-		if err != nil {
-			return err
-		}
-		_ = stream.SetColWidth(1, 2, 50)
-		err = stream.SetRow("A1", []interface{}{
-			excelize.Cell{Value: "旧版原文"},
-			excelize.Cell{Value: "新版原文"},
-			excelize.Cell{Value: "差分字符量"},
-		})
-		err = stream.SetRow("A2", []interface{}{
-			excelize.Cell{Value: ""},
-			excelize.Cell{Value: ""},
-			excelize.Cell{Formula: "SUM(C3:C1000)"},
-		})
-		var index2 int
-		for k := range rows {
-			if k == 0 || index2 >= len(rows2) {
-				continue
-			}
-			oriText := rows[k][2]
-			ori2Text := rows2[index2][2]
-			ori2SimText := m1.ReplaceAllString(ori2Text, "")
-			cell, _ := excelize.CoordinatesToCellName(1, k+2)
-			if oriText == ori2SimText {
-				err = stream.SetRow(cell, []interface{}{
-					excelize.Cell{StyleID: styleID, Value: oriText},
-					excelize.Cell{StyleID: styleID, Value: ori2Text},
-					excelize.Cell{StyleID: styleID, Value: 0},
-				})
-				index2++
-			} else if f2Has[oriText] == 0 || (f2Has[oriText] != 0 && f2Has[oriText] < index2) {
-				err = stream.SetRow(cell, []interface{}{
-					excelize.Cell{StyleID: styleID, Value: oriText},
-					excelize.Cell{StyleID: styleID, Value: ""},
-					excelize.Cell{StyleID: styleID, Formula: "LEN(" + cell + ")"},
-				})
-			} else if f2Has[oriText] != 0 {
-				sumOri2Text := ""
-				for oriText != ori2SimText && index2+1 < len(rows2) {
-					sumOri2Text += ori2Text
-					index2++
-					ori2Text = rows2[index2][2]
-					ori2SimText = m1.ReplaceAllString(ori2Text, "")
-				}
-				sumOri2Text += ori2Text
-				index2++
-				err = stream.SetRow(cell, []interface{}{
-					excelize.Cell{StyleID: styleID, Value: oriText},
-					excelize.Cell{StyleID: styleID, Value: sumOri2Text},
-					excelize.Cell{StyleID: styleID, Formula: "LEN(" + cell + ")"},
-				})
-			}
-		}
-		err = stream.Flush()
-		if err != nil {
-			return err
-		}
-	}
-	e.Output.DeleteSheet("Sheet1")
-	if err := e.Output.SaveAs("hssh新旧文本差异.xlsx"); err != nil {
-		fmt.Println(err)
-	}
-	return nil
-}
-
 func (e *Excel) HssH() error {
-	f, err := excelize.OpenFile("./tcpclient/excel/hssh.xlsx")
+	f, err := excelize.OpenFile("./hssh.xlsx")
 	if err != nil {
 		return err
 	}
@@ -188,6 +91,19 @@ func (e *Excel) HssH() error {
 	sheetList := f.GetSheetList()
 	// 记录翻译
 	trans := make(map[string]string)
+	allText := ""
+	newSheet := func(sheet string) (*excelize.StreamWriter, error) {
+		e.Output.NewSheet(sheet)
+		stream, err := e.Output.NewStreamWriter(sheet)
+		if err != nil {
+			return nil, err
+		}
+		_ = stream.SetColWidth(1, 3, 50)
+		err = stream.SetRow("A1", []interface{}{excelize.Cell{Value: "new"}, excelize.Cell{Value: "old"}, excelize.Cell{Value: "訳文"}, excelize.Cell{Value: "差分"}})
+		err = stream.SetRow("A2", []interface{}{excelize.Cell{Value: ""}, excelize.Cell{Value: ""}, excelize.Cell{Value: ""}, excelize.Cell{Formula: "SUM(D3:D1000)"}})
+		return stream, nil
+	}
+	styleID, _ := e.Output.NewStyle(&excelize.Style{Alignment: &excelize.Alignment{Vertical: "center", WrapText: true}})
 	for _, sheet := range sheetList {
 		rows, err := f.GetRows(sheet)
 		if err != nil {
@@ -197,49 +113,59 @@ func (e *Excel) HssH() error {
 			if k == 0 || row[3] == "" {
 				continue
 			}
-			key := strings.ReplaceAll(row[2], "ベリアル", "")
-			key = strings.ReplaceAll(key, "ベル", "")
+			key := row[2]
 			// 保存
 			trans[key] = row[3]
+			allText += key
 			// 增加命中率
-			appendKeys := strings.SplitAfter(key, "。")
-			appendValues := strings.SplitAfter(row[3], "。")
-			appendValues2 := strings.SplitAfter(row[3], "，")
-			if len(appendKeys) == len(appendValues) {
-				for k, key := range appendKeys {
-					trans[key] = appendValues[k]
+			powerSplit := func(reg string) {
+				compile := regexp.MustCompile(reg)
+				smallKeys := compile.Split(key, -1)
+				for k, com := range compile.FindAllString(key, -1) {
+					smallKeys[k] += com
 				}
-			} else if len(appendKeys) == len(appendValues2) {
-				for k, key := range appendKeys {
-					trans[key] = appendValues2[k]
+				smallValues := compile.Split(row[3], -1)
+				for k, com := range compile.FindAllString(row[3], -1) {
+					smallValues[k] += com
+				}
+				if len(smallKeys) == len(smallValues) {
+					for k, key := range smallKeys {
+						value := smallValues[k]
+						if _, ok := trans[key]; !ok {
+							trans[key] = value
+						}
+					}
 				}
 			}
-			// 再一次增加命中率
-			appendWKeys := strings.SplitAfter(key, "…")
-			appendWValues := strings.SplitAfter(row[3], "……")
-			if len(appendWKeys) == len(appendWValues) {
-				for k, key := range appendWKeys {
-					trans[key] = appendWValues[k]
-				}
-			}
+			powerSplit(`[、，]+`)
+			powerSplit(`[。]+`)
+			powerSplit(`[。、，]+`)
+			powerSplit(`[…]+`)
+			powerSplit(`[！]+`)
+			powerSplit(`[？]+`)
+			powerSplit(`[！？。、，…]+`)
 		}
 	}
 	if err = f.Close(); err != nil {
 		return err
 	}
 	// 开始匹配
-	f, err = excelize.OpenFile("./tcpclient/excel/hssh-renpy-tl.xlsx")
+	f, err = excelize.OpenFile("./hssh-renpy-tl.xlsx")
 	if err != nil {
 		return err
 	}
 	// 获取工作表中指定单元格的值
 	sheetList = f.GetSheetList()
-	var totalCount, unmatchCount int64
+	selectSheet := map[string]bool{
+		"10.rpy|0日目": true, "11.rpy|1日目": true, "14.rpy|4日目": true, "15.rpy|5日目": true, "16.rpy|6日目": true,
+	}
+	var totalCount, unmatchedCount, tmpCount int64
 	for _, sheet := range sheetList {
-		if sheet != "30.rpy" {
+		if !selectSheet[sheet] {
 			continue
 		}
 		rows, err := f.GetRows(sheet)
+		stream, err := newSheet(sheet)
 		if err != nil {
 			return err
 		}
@@ -247,59 +173,101 @@ func (e *Excel) HssH() error {
 			if k == 0 {
 				continue
 			}
-			var logOn bool
-			logOn = true
-			//m1 := regexp.MustCompile(`\{.*?\}`)
 			m1 := regexp.MustCompile(`[\x20-\x7e]+`)
-			keyText := m1.ReplaceAllString(row[2], "【数】")
-			if logOn {
-				log.Println(row[2])
-				log.Println(keyText)
-			}
-			//log.Println(row[2])
-			simText := m1.ReplaceAllString(row[2], "")
+			//keyText := m1.ReplaceAllString(row[2], "【数】")
+			rowText := strings.ReplaceAll(row[2], "[na]", "ベリアル")
+			rowText = strings.ReplaceAll(rowText, "[na2]", "ベル")
+			simText := m1.ReplaceAllString(rowText, "")
 			// match
 			matchText := trans[simText]
-			// 增加命中率
-			if matchText == "" {
-				keys := strings.SplitAfter(simText, "。")
-				for _, k := range keys {
-					if k == "" {
-						continue
+			//if strings.HasPrefix(keyText, "【数】") {
+			//	matchText = "【数】" + matchText
+			//}
+			if simText == "" {
+				matchText = rowText
+			} else if matchText == "" && strings.Contains(allText, simText) {
+				powerMatch := func(text, reg string) string {
+					if text != "" {
+						return text
 					}
-					if t := trans[k]; t != "" {
-						matchText += t
-					} else {
-						matchText += "【待翻译】"
+					mustCompile := regexp.MustCompile(reg)
+					smallKeys := mustCompile.Split(simText, -1)
+					for k, com := range mustCompile.FindAllString(simText, -1) {
+						smallKeys[k] += com
 					}
+					for _, k := range smallKeys {
+						if t, ok := trans[k]; ok {
+							text += t
+						} else {
+							text = ""
+							break
+						}
+					}
+					return text
 				}
-				if strings.Contains(matchText, "【待翻译】") {
-					matchText = ""
+				// 不断抢救
+				matchText = powerMatch(matchText, `[、，]+`)
+				matchText = powerMatch(matchText, `[。]+`)
+				matchText = powerMatch(matchText, `[、，。]+`)
+				matchText = powerMatch(matchText, `[！]+`)
+				matchText = powerMatch(matchText, `[？]+`)
+				matchText = powerMatch(matchText, `[…]+`)
+				matchText = powerMatch(matchText, `[！？。、，…]+`)
+				if matchText == "" {
+					tmpCount++
+					log.Println("[" + simText + "]")
 				}
 			}
+			if matchText == "" {
+				unmatchedCount++
+			}
+			var logOn bool
+			//logOn = true
 			if logOn {
-				if strings.HasPrefix(keyText, "【数】") {
-					matchText = "【数】" + matchText
+				log.Println(rowText)
+				log.Println(simText)
+				if matchText == "" {
+					log.Println("译文：", "unmatched")
+					log.Println("-----------------")
+				} else {
+					log.Println("译文：", matchText)
+					log.Println("-----------------")
 				}
-				log.Println("译文：", matchText)
-				log.Println("-----------------")
-			}
-			if matchText == "" {
-				unmatchCount++
-			}
-			if matchText == "" && !logOn {
-				log.Println(row[2])
-				log.Println(m1.ReplaceAllString(row[2], "【数】"))
-				log.Println("译文：", matchText)
-				log.Println("-----------------")
-				unmatchCount++
 			}
 			totalCount++
+			// 输出成文件
+			cell, _ := excelize.CoordinatesToCellName(1, k+2)
+			cell2, _ := excelize.CoordinatesToCellName(3, k+2)
+			formula := "=IF(" + cell2 + "=\"\",LEN(" + cell + "),0)"
+			if matchText == "" {
+				simText = ""
+			} else {
+				matchText = strings.ReplaceAll(matchText, "贝利艾尔", "[na]")
+				matchText = strings.ReplaceAll(matchText, "贝尔", "[na2]")
+				if strings.HasPrefix(row[2], "\\n") {
+					matchText = "\\n " + matchText
+				}
+				if strings.HasSuffix(row[2], "{w}{nw}") {
+					matchText += "{w}{nw}"
+				}
+			}
+			// matchText改造
+			err = stream.SetRow(cell, []interface{}{
+				excelize.Cell{StyleID: styleID, Value: row[2]},
+				excelize.Cell{StyleID: styleID, Value: simText},
+				excelize.Cell{StyleID: styleID, Value: matchText},
+				excelize.Cell{StyleID: styleID, Formula: formula},
+			})
 			//simText = strings.TrimLeft(simText, `\n `)
 			//log.Println(simText)
 		}
+		_ = stream.Flush()
 	}
-	log.Println(fmt.Sprintf("total:%d, unmatch:%d", totalCount, unmatchCount))
+	e.Output.DeleteSheet("Sheet1")
+	if err := e.Output.SaveAs("hssh新旧文本差异.xlsx"); err != nil {
+		fmt.Println(err)
+	}
+	log.Println(fmt.Sprintf("total:%d, unmatch:%d, tmp:%d", totalCount, unmatchedCount, tmpCount))
 	return nil
 }
 

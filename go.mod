@@ -1,4 +1,4 @@
-module awesomeProject
+module vntt
 
 go 1.17
 

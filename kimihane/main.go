@@ -52,11 +52,15 @@ func CreateTransMap(dirPath string) (map[string]string, error) {
 			}
 			tm = mapPlus(tm, m)
 		} else {
+			if !strings.HasSuffix(f.Name(), ".txt") {
+				println("跳过", f.Name())
+				continue
+			}
 			file, err := os.Open(dirPath + "/" + f.Name())
 			if err != nil {
 				return nil, err
 			}
-			// 将收到的GBK内容转换成utf-8
+			// 将UTF16内容转换成utf-8
 			utf8Reader := transform.NewReader(file, unicode.UTF16(unicode.LittleEndian, unicode.UseBOM).NewDecoder())
 			scanner := bufio.NewScanner(utf8Reader)
 			var jpText, chText, num string
@@ -71,14 +75,14 @@ func CreateTransMap(dirPath string) (map[string]string, error) {
 						tm[jpText] = chText
 						num = newNum
 					}
-					jpText = strings.Split(text, "○")[2]
+					jpText = strings.Join(strings.Split(text, "○")[2:], "○")
 					// trim
 					jpText = strings.Trim(jpText, "　")
 					// 去除ruby
 					// 例：{浅生文|あそうふみ} => 浅生文
 					jpText = ReplaceRuby(jpText, "{", "|", "}")
 				} else if strings.HasPrefix(text, "●") {
-					chText = strings.Split(text, "●")[2]
+					chText = strings.Join(strings.Split(text, "●")[2:], "●")
 					// trim
 					chText = strings.Trim(chText, "　")
 					// 去除ruby
@@ -108,12 +112,12 @@ func InsertTransMap(filepath string, tm map[string]string) error {
 			continue
 		}
 		for k, row := range rows {
-			if k == 0 {
+			if k == 0 || row[2] == "" {
 				continue
 			}
-			if strings.HasPrefix(row[0], "Image") {
-				continue
-			}
+			//if strings.HasPrefix(row[0], "Image") {
+			//	continue
+			//}
 			jpText := row[2]
 			// 去除ruby
 			// 例：≪天／・≫≪使／・≫ => 天使
@@ -126,6 +130,7 @@ func InsertTransMap(filepath string, tm map[string]string) error {
 					return err
 				}
 			} else {
+				//println(fmt.Sprintf("○%s_%d○%s\n●%s_%d●\n", sheet, k, jpText, sheet, k))
 				println("["+sheet+"] not found:", jpText)
 				cell, _ := excelize.CoordinatesToCellName(7, k+1)
 				if err = f.SetCellStr(sheet, cell, "要确认"); err != nil {
@@ -135,7 +140,7 @@ func InsertTransMap(filepath string, tm map[string]string) error {
 			}
 		}
 	}
-	//_ = f.SaveAs("./kimihane/input/Kimihane Couples - Chinese Sheet 1 - export.xlsx")
+	_ = f.SaveAs(filepath + ".fixed.xlsx")
 	return nil
 }
 
